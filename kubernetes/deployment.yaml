@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finllm-api
+  labels:
+    app: finllm-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: finllm-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: finllm-api
+    spec:
+      containers:
+      - name: finllm-api
+        image: ${ECR_REPOSITORY_URI}/finllm:latest
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+            nvidia.com/gpu: 1
+          requests:
+            cpu: "2"
+            memory: "8Gi"
+        env:
+        - name: FINLLM_MODEL_PATH
+          value: "/models/finllm_best.pt"
+        - name: FINLLM_CONFIG_PATH
+          value: "/models/finllm_config.json"
+        - name: CACHE_SIZE
+          value: "200"
+        - name: PYTHONPATH
+          value: "/app"
+        ports:
+        - containerPort: 5000
+        volumeMounts:
+        - name: models-volume
+          mountPath: /models
+        - name: logs-volume
+          mountPath: /app/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: models-volume
+        persistentVolumeClaim:
+          claimName: finllm-models-pvc
+      - name: logs-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: finllm-api-service
+  labels:
+    app: finllm-api
+spec:
+  selector:
+    app: finllm-api
+  ports:
+  - port: 80
+    targetPort: 5000
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: finllm-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: finllm-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 75
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: finllm-models-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: efs-sc
